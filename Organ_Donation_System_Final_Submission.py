@@ -2,6 +2,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import sqlite3
 import heapq
+import os
+import platform
+import subprocess
 from datetime import datetime
 try:
     import matplotlib.pyplot as plt
@@ -17,9 +20,37 @@ class Database:
     def __init__(self):
         self.conn = sqlite3.connect("hospital.db")
         self.cur = self.conn.cursor()
-        self.cur.execute
-        self.cur.execute
-        self.cur.execute
+        self.create_tables()
+    def create_tables(self):
+        self.cur.execute("""
+        CREATE TABLE IF NOT EXISTS donors(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            age TEXT,
+            blood TEXT,
+            organ TEXT
+        )
+        """)
+        self.cur.execute("""
+        CREATE TABLE IF NOT EXISTS recipients(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            age TEXT,
+            blood TEXT,
+            organ TEXT,
+            urgency TEXT
+        )
+        """)
+        self.cur.execute("""
+        CREATE TABLE IF NOT EXISTS history(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            donor TEXT,
+            recipient TEXT,
+            score INTEGER,
+            date TEXT
+        )
+        """)
+
         self.conn.commit()
 class Person:
     def __init__(self, name, age, blood):
@@ -48,53 +79,47 @@ class MatchMaker:
     }
     def score(self, donor, recipient):
         score = 0
-        if donor[4].lower() == recipient[4].lower():
-            score += 50
-        if recipient[3] in self.compatibility.get(donor[3], []):
-            score += 30
-        score += min(int(recipient[5]) * 2, 20)
+        try:
+            if donor[4].lower() == recipient[4].lower():
+                score += 50
+
+            if recipient[3] in self.compatibility.get(donor[3], []):
+                score += 30
+
+            score += min(int(recipient[5]) * 2, 20)
+        except:
+            pass
         return score
 class App:
     def __init__(self, root):
         self.db = Database()
         self.matcher = MatchMaker()
         self.root = root
-        self.root.title("Hospital Organ Donation Dashboard")
+        self.root.title("Hospital Organ Donation System")
         self.root.geometry("1200x700")
         self.login_screen()
     def login_screen(self):
         self.login = tk.Frame(self.root)
         self.login.pack(fill="both", expand=True)
-        tk.Label(
-            self.login,
-            text="HOSPITAL LOGIN",
-            font=("Arial", 22, "bold")
-        ).pack(pady=20)
+        tk.Label(self.login, text="HOSPITAL LOGIN",
+                 font=("Arial", 22, "bold")).pack(pady=20)
         tk.Label(self.login, text="Username").pack()
         self.user = tk.Entry(self.login)
         self.user.pack()
         tk.Label(self.login, text="Password").pack()
         self.password = tk.Entry(self.login, show="*")
         self.password.pack()
-        tk.Button(
-            self.login,
-            text="Login",
-            command=self.check_login
-        ).pack(pady=10)
+        tk.Button(self.login, text="Login",
+                  command=self.check_login).pack(pady=10)
     def check_login(self):
-        if self.user.get() == "admin" and self.password.get() == "1234":
+        if self.user.get() == "rameen" and self.password.get() == "1234":
             self.login.destroy()
             self.main_ui()
         else:
             messagebox.showerror("Error", "Invalid Login")
     def main_ui(self):
-        title = tk.Label(
-            self.root,
-            text="ORGAN DONATION MANAGEMENT SYSTEM",
-            font=("Arial", 18, "bold"),
-            bg="lightblue"
-        )
-        title.pack(fill="x")
+        tk.Label(self.root, text="ORGAN DONATION MANAGEMENT SYSTEM",
+                 font=("Arial", 18, "bold"), bg="lightblue").pack(fill="x")
         self.tabs = ttk.Notebook(self.root)
         self.tabs.pack(fill="both", expand=True)
         self.dashboard = tk.Frame(self.tabs)
@@ -115,32 +140,16 @@ class App:
     def build_dashboard(self):
         self.stats = tk.Label(self.dashboard, font=("Arial", 15))
         self.stats.pack(pady=20)
-        tk.Button(
-            self.dashboard,
-            text="Blood Group Analytics",
-            command=self.show_chart
-        ).pack()
-        tk.Button(
-            self.dashboard,
-            text="Export PDF Report",
-            command=self.export_pdf
-        ).pack(pady=10)
+        tk.Button(self.dashboard, text="Blood Chart",
+                  command=self.show_chart).pack()
+        tk.Button(self.dashboard, text="Export PDF",
+                  command=self.export_pdf).pack(pady=10)
         self.refresh_dashboard()
     def refresh_dashboard(self):
-        donors = self.db.cur.execute(
-            "SELECT COUNT(*) FROM donors"
-        ).fetchone()[0]
-        recipients = self.db.cur.execute(
-            "SELECT COUNT(*) FROM recipients"
-        ).fetchone()[0]
-        matches = self.db.cur.execute(
-            "SELECT COUNT(*) FROM history"
-        ).fetchone()[0]
-        self.stats.config(
-            text=f"Total Donors: {donors}\n"
-                 f"Total Recipients: {recipients}\n"
-                 f"Match Records: {matches}"
-        )
+        donors = self.db.cur.execute("SELECT COUNT(*) FROM donors").fetchone()[0]
+        recipients = self.db.cur.execute("SELECT COUNT(*) FROM recipients").fetchone()[0]
+        matches = self.db.cur.execute("SELECT COUNT(*) FROM history").fetchone()[0]
+        self.stats.config(text=f"Donors: {donors}\nRecipients: {recipients}\nMatches: {matches}")
     def build_donor_tab(self):
         labels = ["Name", "Age", "Blood", "Organ"]
         self.d_entries = []
@@ -149,11 +158,8 @@ class App:
             e = tk.Entry(self.donor_tab)
             e.grid(row=i, column=1)
             self.d_entries.append(e)
-        tk.Button(
-            self.donor_tab,
-            text="Add Donor",
-            command=self.add_donor
-        ).grid(row=5, column=1)
+        tk.Button(self.donor_tab, text="Add Donor",
+                  command=self.add_donor).grid(row=5, column=1)
     def add_donor(self):
         vals = [e.get() for e in self.d_entries]
         self.db.cur.execute(
@@ -164,18 +170,15 @@ class App:
         self.refresh_dashboard()
         messagebox.showinfo("Success", "Donor Added")
     def build_recipient_tab(self):
-        labels = ["Name", "Age", "Blood", "Organ Needed", "Urgency"]
+        labels = ["Name", "Age", "Blood", "Organ", "Urgency"]
         self.r_entries = []
         for i, txt in enumerate(labels):
             tk.Label(self.recipient_tab, text=txt).grid(row=i, column=0)
             e = tk.Entry(self.recipient_tab)
             e.grid(row=i, column=1)
             self.r_entries.append(e)
-        tk.Button(
-            self.recipient_tab,
-            text="Add Recipient",
-            command=self.add_recipient
-        ).grid(row=6, column=1)
+        tk.Button(self.recipient_tab, text="Add Recipient",
+                  command=self.add_recipient).grid(row=6, column=1)
     def add_recipient(self):
         vals = [e.get() for e in self.r_entries]
         self.db.cur.execute(
@@ -186,59 +189,36 @@ class App:
         self.refresh_dashboard()
         messagebox.showinfo("Success", "Recipient Added")
     def build_match_tab(self):
-        tk.Button(
-            self.match_tab,
-            text="Find Matches",
-            command=self.find_matches
-        ).pack()
-        self.tree = ttk.Treeview(
-            self.match_tab,
-            columns=("Donor", "Recipient", "Score"),
-            show="headings"
-        )
+        tk.Button(self.match_tab, text="Find Matches",
+                  command=self.find_matches).pack()
+        self.tree = ttk.Treeview(self.match_tab,
+                                 columns=("Donor", "Recipient", "Score"),
+                                 show="headings")
         for c in ("Donor", "Recipient", "Score"):
             self.tree.heading(c, text=c)
         self.tree.pack(fill="both", expand=True)
     def find_matches(self):
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        donors = self.db.cur.execute(
-            "SELECT * FROM donors"
-        ).fetchall()
-        recipients = self.db.cur.execute(
-            "SELECT * FROM recipients"
-        ).fetchall()
-        queue = []
+        for i in self.tree.get_children():
+            self.tree.delete(i)
+        donors = self.db.cur.execute("SELECT * FROM donors").fetchall()
+        recipients = self.db.cur.execute("SELECT * FROM recipients").fetchall()
         for r in recipients:
-            heapq.heappush(queue, (-int(r[5]), r))
-        while queue:
-            _, recipient = heapq.heappop(queue)
-            for donor in donors:
-                score = self.matcher.score(donor, recipient)
+            for d in donors:
+                score = self.matcher.score(d, r)
                 if score >= 60:
-                    self.tree.insert(
-                        "",
-                        "end",
-                        values=(donor[1], recipient[1], score)
-                    )
+                    self.tree.insert("", "end",
+                                     values=(d[1], r[1], score))
                     self.db.cur.execute(
                         "INSERT INTO history(donor,recipient,score,date) VALUES(?,?,?,?)",
-                        (
-                            donor[1],
-                            recipient[1],
-                            score,
-                            str(datetime.now())
-                        )
+                        (d[1], r[1], score, str(datetime.now()))
                     )
         self.db.conn.commit()
         self.load_history()
         self.refresh_dashboard()
     def build_history_tab(self):
-        self.history = ttk.Treeview(
-            self.history_tab,
-            columns=("Donor", "Recipient", "Score", "Date"),
-            show="headings"
-        )
+        self.history = ttk.Treeview(self.history_tab,
+                                    columns=("Donor", "Recipient", "Score", "Date"),
+                                    show="headings")
         for c in ("Donor", "Recipient", "Score", "Date"):
             self.history.heading(c, text=c)
         self.history.pack(fill="both", expand=True)
@@ -249,14 +229,11 @@ class App:
         rows = self.db.cur.execute(
             "SELECT donor,recipient,score,date FROM history"
         ).fetchall()
-        for row in rows:
-            self.history.insert("", "end", values=row)
+        for r in rows:
+            self.history.insert("", "end", values=r)
     def show_chart(self):
         if plt is None:
-            messagebox.showerror(
-                "Missing Package",
-                "pip install matplotlib"
-            )
+            messagebox.showerror("Error", "Install matplotlib")
             return
         rows = self.db.cur.execute(
             "SELECT blood,COUNT(*) FROM donors GROUP BY blood"
@@ -266,36 +243,40 @@ class App:
         labels = [x[0] for x in rows]
         values = [x[1] for x in rows]
         plt.pie(values, labels=labels, autopct="%1.1f%%")
-        plt.title("Blood Group Distribution")
+        plt.title("Blood Distribution")
         plt.show()
     def export_pdf(self):
         if not REPORTLAB:
-            messagebox.showerror(
-                "Missing Package",
-                "pip install reportlab"
-            )
+            messagebox.showerror("Error", "Install reportlab")
             return
-        pdf = SimpleDocTemplate("hospital_report.pdf")
+        file = "hospital_report.pdf"
+        pdf = SimpleDocTemplate(file)
         styles = getSampleStyleSheet()
-        content = [
-            Paragraph("Hospital Organ Donation Report", styles["Title"]),
-            Spacer(1, 12)
-        ]
+        content = [Paragraph("Organ Donation Report", styles["Title"]),
+                   Spacer(1, 12)]
         rows = self.db.cur.execute(
             "SELECT donor,recipient,score,date FROM history"
         ).fetchall()
-        for r in rows:
-            content.append(
-                Paragraph(
-                    f"Donor: {r[0]} | Recipient: {r[1]} | Score: {r[2]}",
+        if not rows:
+            content.append(Paragraph("No data found", styles["BodyText"]))
+        else:
+            for r in rows:
+                content.append(Paragraph(
+                    f"{r[0]} → {r[1]} | Score: {r[2]} | {r[3]}",
                     styles["BodyText"]
-                )
-            )
+                ))
+                content.append(Spacer(1, 5))
         pdf.build(content)
-        messagebox.showinfo(
-            "Success",
-            "hospital_report.pdf created"
-        )
+        messagebox.showinfo("Success", "PDF Generated")
+        try:
+            if platform.system() == "Windows":
+                os.startfile(file)
+            elif platform.system() == "Darwin":
+                subprocess.call(["open", file])
+            else:
+                subprocess.call(["xdg-open", file])
+        except:
+            pass
 if __name__ == "__main__":
     root = tk.Tk()
     App(root)
