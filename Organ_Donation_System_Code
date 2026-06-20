@@ -1,0 +1,649 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+from datetime import datetime
+import sqlite3
+import csv
+import matplotlib.pyplot as plt
+import os
+import sys
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+class Database:
+    def __init__(self):
+        self.conn = sqlite3.connect("hospital.db")
+        self.cursor = self.conn.cursor()
+        self.create_tables()
+    def create_tables(self):
+        self.cursor.execute("""
+        CREATE TABLE IF NOT EXISTS donors(
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            age INTEGER,
+            gender TEXT,
+            blood_group TEXT,
+            organ TEXT,
+            status TEXT,
+            date TEXT
+        )
+        """)
+        self.cursor.execute("""
+        CREATE TABLE IF NOT EXISTS recipients(
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            age INTEGER,
+            gender TEXT,
+            blood_group TEXT,
+            organ_needed TEXT,
+            priority TEXT,
+            date TEXT
+        )
+        """)
+        self.conn.commit()
+    def get_all_donors(self):
+        self.cursor.execute("SELECT * FROM donors")
+        return self.cursor.fetchall()
+    def get_all_recipients(self):
+        self.cursor.execute("SELECT * FROM recipients")
+        return self.cursor.fetchall()
+class Person:
+    def __init__(self, pid, name, age, gender, blood_group):
+        self.pid = pid
+        self.name = name
+        self.age = int(age)
+        self.gender = gender
+        self.blood_group = blood_group
+class Donor(Person):
+    def __init__(self, pid, name, age, gender, blood_group, organ, status="Available"):
+        super().__init__(pid, name, age, gender, blood_group)
+        self.organ = organ
+        self.status = status
+        self.date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    def to_tuple(self):
+        return (self.pid, self.name, self.age, self.gender,
+                self.blood_group, self.organ,
+                self.status, self.date)
+class Recipient(Person):
+    def __init__(self, pid, name, age, gender, blood_group, organ_needed, priority="Normal"):
+        super().__init__(pid, name, age, gender, blood_group)
+        self.organ_needed = organ_needed
+        self.priority = priority
+        self.date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    def to_tuple(self):
+        return (self.pid, self.name, self.age, self.gender,
+                self.blood_group, self.organ_needed,
+                self.priority, self.date)
+class OrganDonationSystem:
+    def __init__(self):
+        self.db = Database()
+        self.donors = []
+        self.recipients = []
+        self.matches = []
+        self.history = []
+    def log(self, action):
+        time = datetime.now().strftime("%H:%M:%S")
+        self.history.append(f"{time} - {action}")
+    def add_donor(self, donor):
+        if self.search_donor(donor.pid):
+            return False
+        self.donors.append(donor)
+        self.db.cursor.execute("INSERT INTO donors VALUES (?,?,?,?,?,?,?,?)",
+                               donor.to_tuple())
+        self.db.conn.commit()
+        self.log(f"Added Donor {donor.name}")
+        return True
+    def add_recipient(self, rec):
+        if self.search_recipient(rec.pid):
+            return False
+        self.recipients.append(rec)
+        self.db.cursor.execute("INSERT INTO recipients VALUES (?,?,?,?,?,?,?,?)",
+                               rec.to_tuple())
+        self.db.conn.commit()
+        self.log(f"Added Recipient {rec.name}")
+        return True
+    def search_donor(self, pid):
+        return next((d for d in self.donors if d.pid == pid), None)
+    def search_recipient(self, pid):
+        return next((r for r in self.recipients if r.pid == pid), None)
+    def delete_donor(self, pid):
+        d = self.search_donor(pid)
+        if not d:
+            return False
+        self.donors.remove(d)
+        self.db.cursor.execute("DELETE FROM donors WHERE id=?", (pid,))
+        self.db.conn.commit()
+        self.log(f"Deleted Donor {pid}")
+        return True
+    def delete_recipient(self, pid):
+        r = self.search_recipient(pid)
+        if not r:
+            return False
+        self.recipients.remove(r)
+        self.db.cursor.execute("DELETE FROM recipients WHERE id=?", (pid,))
+        self.db.conn.commit()
+        self.log(f"Deleted Recipient {pid}")
+        return True
+    def match_organs(self):
+        self.matches.clear()
+        for d in self.donors:
+            if d.status != "Available":
+                continue
+            for r in self.recipients:
+                if (d.organ.lower() == r.organ_needed.lower() and
+                        d.blood_group == r.blood_group):
+                    d.status = "Matched"
+                    self.matches.append(f"{d.name} → {r.name} ({d.organ})")
+                    self.log(f"Match {d.name} with {r.name}")
+        return len(self.matches)
+    def get_blood_group_stats(self):
+        blood_groups = {}
+        for d in self.donors:
+            blood_groups[d.blood_group] = blood_groups.get(d.blood_group, 0) + 1
+        for r in self.recipients:
+            if r.blood_group not in blood_groups:
+                blood_groups[r.blood_group] = 0
+        return blood_groups
+    def donor_count(self): 
+        return len(self.donors)
+    def recipient_count(self): 
+        return len(self.recipients)
+    def match_count(self): 
+        return len(self.matches)
+class LoginWindow:
+    def __init__(self, root, on_success):
+        self.win = tk.Toplevel(root)
+        self.win.title("Login")
+        self.win.geometry("400x300")
+        self.win.resizable(False, False)
+        self.on_success = on_success
+        title = tk.Label(self.win, text="MediCare", font=("Arial", 20, "bold"), fg="darkgreen")
+        title.pack(pady=10)
+        subtitle = tk.Label(self.win, text="Organ Donation Management System", font=("Arial", 10), fg="gray")
+        subtitle.pack()
+        tk.Label(self.win, text="Username", font=("Arial", 10)).pack(pady=(20, 5))
+        self.u = tk.Entry(self.win, font=("Arial", 10), width=30)
+        self.u.pack()
+        tk.Label(self.win, text="Password", font=("Arial", 10)).pack(pady=(10, 5))
+        self.p = tk.Entry(self.win, show="*", font=("Arial", 10), width=30)
+        self.p.pack()
+        tk.Button(self.win, text="Login", command=self.check, bg="darkgreen", 
+                 fg="white", font=("Arial", 10, "bold"), width=20).pack(pady=20)
+    def check(self):
+        if (self.u.get(), self.p.get()) in [("admin", "1234"), ("doctor", "doc")]:
+            self.win.destroy()
+            self.on_success()
+        else:
+            messagebox.showerror("Error", "Invalid Login")
+class DonorSection:
+    def __init__(self, parent, system, refresh_callback):
+        self.parent = parent
+        self.system = system
+        self.refresh_callback = refresh_callback
+        self.create_ui()
+    def create_ui(self):
+        main_frame = tk.Frame(self.parent)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        frame = tk.LabelFrame(main_frame, text="Donor Management", font=("Arial", 12, "bold"))
+        frame.pack(fill="x", pady=10)
+        tk.Label(frame, text="ID:", font=("Arial", 10)).grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        self.donor_id = tk.Entry(frame, font=("Arial", 10), width=20)
+        self.donor_id.grid(row=0, column=1, padx=5, pady=5)
+        tk.Label(frame, text="Name:", font=("Arial", 10)).grid(row=0, column=2, sticky="w", padx=5, pady=5)
+        self.donor_name = tk.Entry(frame, font=("Arial", 10), width=20)
+        self.donor_name.grid(row=0, column=3, padx=5, pady=5)
+        tk.Label(frame, text="Age:", font=("Arial", 10)).grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.donor_age = tk.Entry(frame, font=("Arial", 10), width=20)
+        self.donor_age.grid(row=1, column=1, padx=5, pady=5)
+        tk.Label(frame, text="Gender:", font=("Arial", 10)).grid(row=1, column=2, sticky="w", padx=5, pady=5)
+        self.donor_gender = ttk.Combobox(frame, values=["Male", "Female", "Other"], 
+                                        state="readonly", font=("Arial", 10), width=17)
+        self.donor_gender.grid(row=1, column=3, padx=5, pady=5)
+        tk.Label(frame, text="Blood Group:", font=("Arial", 10)).grid(row=2, column=0, sticky="w", padx=5, pady=5)
+        self.donor_blood = ttk.Combobox(frame, values=["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"],
+                                       state="readonly", font=("Arial", 10), width=17)
+        self.donor_blood.grid(row=2, column=1, padx=5, pady=5)
+        tk.Label(frame, text="Organ:", font=("Arial", 10)).grid(row=2, column=2, sticky="w", padx=5, pady=5)
+        self.donor_organ = tk.Entry(frame, font=("Arial", 10), width=20)
+        self.donor_organ.grid(row=2, column=3, padx=5, pady=5)
+        tk.Button(frame, text="Add Donor", command=self.add_donor, bg="green", fg="white", 
+                 font=("Arial", 10, "bold"), width=15).grid(row=3, column=0, padx=5, pady=10)
+        tk.Button(frame, text="Delete Donor", command=self.del_donor, bg="red", fg="white", 
+                 font=("Arial", 10, "bold"), width=15).grid(row=3, column=1, padx=5, pady=10)
+        tk.Button(frame, text="Clear", command=self.clear_fields, bg="orange", fg="white", 
+                 font=("Arial", 10, "bold"), width=15).grid(row=3, column=2, padx=5, pady=10)
+    def add_donor(self):
+        try:
+            if not all([self.donor_id.get(), self.donor_name.get(), self.donor_age.get(), 
+                       self.donor_gender.get(), self.donor_blood.get(), self.donor_organ.get()]):
+                messagebox.showerror("Error", "Please fill all fields")
+                return
+            d = Donor(
+                self.donor_id.get(),
+                self.donor_name.get(),
+                self.donor_age.get(),
+                self.donor_gender.get(),
+                self.donor_blood.get(),
+                self.donor_organ.get()
+            )
+            if self.system.add_donor(d):
+                messagebox.showinfo("Success", "Donor added successfully")
+                self.clear_fields()
+                self.refresh_callback()
+            else:
+                messagebox.showerror("Error", "Donor ID already exists")
+        except Exception as e:
+            messagebox.showerror("Error", f"Invalid input: {str(e)}")
+    def del_donor(self):
+        pid = self.donor_id.get()
+        if not pid:
+            messagebox.showerror("Error", "Please enter Donor ID")
+            return
+        if self.system.delete_donor(pid):
+            messagebox.showinfo("Success", "Donor deleted successfully")
+            self.clear_fields()
+            self.refresh_callback()
+        else:
+            messagebox.showerror("Error", "Donor not found")
+    def clear_fields(self):
+        self.donor_id.delete(0, tk.END)
+        self.donor_name.delete(0, tk.END)
+        self.donor_age.delete(0, tk.END)
+        self.donor_gender.set("")
+        self.donor_blood.set("")
+        self.donor_organ.delete(0, tk.END)
+class RecipientSection:
+    def __init__(self, parent, system, refresh_callback):
+        self.parent = parent
+        self.system = system
+        self.refresh_callback = refresh_callback
+        self.create_ui()
+    def create_ui(self):
+        main_frame = tk.Frame(self.parent)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        frame = tk.LabelFrame(main_frame, text="Recipient Management", font=("Arial", 12, "bold"))
+        frame.pack(fill="x", pady=10)
+        tk.Label(frame, text="ID:", font=("Arial", 10)).grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        self.rec_id = tk.Entry(frame, font=("Arial", 10), width=20)
+        self.rec_id.grid(row=0, column=1, padx=5, pady=5)
+        tk.Label(frame, text="Name:", font=("Arial", 10)).grid(row=0, column=2, sticky="w", padx=5, pady=5)
+        self.rec_name = tk.Entry(frame, font=("Arial", 10), width=20)
+        self.rec_name.grid(row=0, column=3, padx=5, pady=5)
+        tk.Label(frame, text="Age:", font=("Arial", 10)).grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.rec_age = tk.Entry(frame, font=("Arial", 10), width=20)
+        self.rec_age.grid(row=1, column=1, padx=5, pady=5)
+        tk.Label(frame, text="Gender:", font=("Arial", 10)).grid(row=1, column=2, sticky="w", padx=5, pady=5)
+        self.rec_gender = ttk.Combobox(frame, values=["Male", "Female", "Other"],
+                                      state="readonly", font=("Arial", 10), width=17)
+        self.rec_gender.grid(row=1, column=3, padx=5, pady=5)
+        tk.Label(frame, text="Blood Group:", font=("Arial", 10)).grid(row=2, column=0, sticky="w", padx=5, pady=5)
+        self.rec_blood = ttk.Combobox(frame, values=["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"],
+                                     state="readonly", font=("Arial", 10), width=17)
+        self.rec_blood.grid(row=2, column=1, padx=5, pady=5)
+        tk.Label(frame, text="Organ Needed:", font=("Arial", 10)).grid(row=2, column=2, sticky="w", padx=5, pady=5)
+        self.rec_organ = tk.Entry(frame, font=("Arial", 10), width=20)
+        self.rec_organ.grid(row=2, column=3, padx=5, pady=5)
+        tk.Button(frame, text="Add Recipient", command=self.add_recipient, bg="green", fg="white",
+                 font=("Arial", 10, "bold"), width=15).grid(row=3, column=0, padx=5, pady=10)
+        tk.Button(frame, text="Delete Recipient", command=self.del_recipient, bg="red", fg="white",
+                 font=("Arial", 10, "bold"), width=15).grid(row=3, column=1, padx=5, pady=10)
+        tk.Button(frame, text="Clear", command=self.clear_fields, bg="orange", fg="white",
+                 font=("Arial", 10, "bold"), width=15).grid(row=3, column=2, padx=5, pady=10)
+    def add_recipient(self):
+        try:
+            if not all([self.rec_id.get(), self.rec_name.get(), self.rec_age.get(), 
+                       self.rec_gender.get(), self.rec_blood.get(), self.rec_organ.get()]):
+                messagebox.showerror("Error", "Please fill all fields")
+                return
+            r = Recipient(
+                self.rec_id.get(),
+                self.rec_name.get(),
+                self.rec_age.get(),
+                self.rec_gender.get(),
+                self.rec_blood.get(),
+                self.rec_organ.get()
+            )
+            if self.system.add_recipient(r):
+                messagebox.showinfo("Success", "Recipient added successfully")
+                self.clear_fields()
+                self.refresh_callback()
+            else:
+                messagebox.showerror("Error", "Recipient ID already exists")
+        except Exception as e:
+            messagebox.showerror("Error", f"Invalid input: {str(e)}")
+    def del_recipient(self):
+        pid = self.rec_id.get()
+        if not pid:
+            messagebox.showerror("Error", "Please enter Recipient ID")
+            return
+        if self.system.delete_recipient(pid):
+            messagebox.showinfo("Success", "Recipient deleted successfully")
+            self.clear_fields()
+            self.refresh_callback()
+        else:
+            messagebox.showerror("Error", "Recipient not found")
+    def clear_fields(self):
+        self.rec_id.delete(0, tk.END)
+        self.rec_name.delete(0, tk.END)
+        self.rec_age.delete(0, tk.END)
+        self.rec_gender.set("")
+        self.rec_blood.set("")
+        self.rec_organ.delete(0, tk.END)
+class MatchingSection:
+    def __init__(self, parent, system, refresh_callback):
+        self.parent = parent
+        self.system = system
+        self.refresh_callback = refresh_callback
+        self.create_ui()
+    def create_ui(self):
+        frame = tk.LabelFrame(self.parent, text="Organ Matching", font=("Arial", 12, "bold"))
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
+        button_frame = tk.Frame(frame)
+        button_frame.pack(fill="x", pady=10)
+        tk.Button(button_frame, text="Find Matches", command=self.match_organs, 
+                 bg="blue", fg="white", font=("Arial", 11, "bold")).pack(side="left", padx=5)
+        tk.Button(button_frame, text="Clear Results", command=self.clear_matches, 
+                 bg="orange", fg="white", font=("Arial", 11, "bold")).pack(side="left", padx=5)
+
+        self.matches_text = tk.Text(frame, height=15, width=50, font=("Arial", 10))
+        self.matches_text.pack(fill="both", expand=True, padx=5, pady=5)
+    def match_organs(self):
+        count = self.system.match_organs()
+        self.display_matches()
+        messagebox.showinfo("Matching Results", f"{count} organ match(es) found!")
+        self.refresh_callback()
+    def display_matches(self):
+        self.matches_text.delete("1.0", tk.END)
+        if self.system.matches:
+            self.matches_text.insert(tk.END, "=== MATCHING RESULTS ===\n\n")
+            for i, match in enumerate(self.system.matches, 1):
+                self.matches_text.insert(tk.END, f"{i}. {match}\n")
+        else:
+            self.matches_text.insert(tk.END, "No matches found.")
+    def clear_matches(self):
+        self.matches_text.delete("1.0", tk.END)
+        self.system.matches.clear()
+class HistorySection:
+    def __init__(self, parent, system):
+        self.parent = parent
+        self.system = system
+        self.create_ui()
+    def create_ui(self):
+        frame = tk.LabelFrame(self.parent, text="Activity History", font=("Arial", 12, "bold"))
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
+        button_frame = tk.Frame(frame)
+        button_frame.pack(fill="x", pady=10)
+        tk.Button(button_frame, text="Refresh History", command=self.refresh_history, 
+                 bg="blue", fg="white", font=("Arial", 10, "bold")).pack(side="left", padx=5)
+        tk.Button(button_frame, text="Clear History", command=self.clear_history, 
+                 bg="red", fg="white", font=("Arial", 10, "bold")).pack(side="left", padx=5)
+        self.history_text = tk.Text(frame, height=15, width=50, font=("Arial", 10))
+        self.history_text.pack(fill="both", expand=True, padx=5, pady=5)
+    def refresh_history(self):
+        self.history_text.delete("1.0", tk.END)
+        if self.system.history:
+            self.history_text.insert(tk.END, "=== ACTIVITY LOG ===\n\n")
+            for log in self.system.history:
+                self.history_text.insert(tk.END, log + "\n")
+        else:
+            self.history_text.insert(tk.END, "No activity history available.")
+    def clear_history(self):
+        if messagebox.askyesno("Confirm", "Clear all history?"):
+            self.system.history.clear()
+            self.history_text.delete("1.0", tk.END)
+            self.history_text.insert(tk.END, "History cleared.")
+class AnalyticsSection:
+    def __init__(self, parent, system):
+        self.parent = parent
+        self.system = system
+        self.create_ui()
+    def create_ui(self):
+        frame = tk.LabelFrame(self.parent, text="Analytics & Reports", font=("Arial", 12, "bold"))
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
+        button_frame = tk.Frame(frame)
+        button_frame.pack(fill="x", pady=10)
+        tk.Button(button_frame, text="Blood Group Chart", 
+                 command=self.show_blood_group_chart, bg="purple", fg="white", 
+                 font=("Arial", 10, "bold")).pack(side="left", padx=5)
+        tk.Button(button_frame, text="Export Donors CSV", 
+                 command=self.export_donors_csv, bg="teal", fg="white", 
+                 font=("Arial", 10, "bold")).pack(side="left", padx=5)
+        tk.Button(button_frame, text="Export Recipients CSV", 
+                 command=self.export_recipients_csv, bg="teal", fg="white", 
+                 font=("Arial", 10, "bold")).pack(side="left", padx=5)
+        tk.Button(button_frame, text="Generate PDF Report", 
+                 command=self.generate_pdf_report, bg="darkred", fg="white", 
+                 font=("Arial", 10, "bold")).pack(side="left", padx=5)
+        stats_frame = tk.LabelFrame(frame, text="System Statistics", font=("Arial", 10, "bold"))
+        stats_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.stats_text = tk.Text(stats_frame, height=10, width=50, font=("Arial", 10))
+        self.stats_text.pack(fill="both", expand=True, padx=5, pady=5)
+        tk.Button(stats_frame, text="Refresh Stats", command=self.refresh_stats, 
+                 bg="green", fg="white", font=("Arial", 9, "bold")).pack(pady=5)
+    def refresh_stats(self):
+        self.stats_text.delete("1.0", tk.END)
+        stats = f"""
+=== SYSTEM STATISTICS ===
+Total Donors: {self.system.donor_count()}
+Total Recipients: {self.system.recipient_count()}
+Total Matches: {self.system.match_count()}
+Blood Group Distribution:
+"""
+        self.stats_text.insert(tk.END, stats)
+        blood_groups = self.system.get_blood_group_stats()
+        for bg, count in sorted(blood_groups.items()):
+            self.stats_text.insert(tk.END, f"  {bg}: {count}\n")
+    def show_blood_group_chart(self):
+        blood_groups = self.system.get_blood_group_stats()
+        if not blood_groups or sum(blood_groups.values()) == 0:
+            messagebox.showwarning("No Data", "No donor data available for chart")
+            return
+        labels = list(blood_groups.keys())
+        sizes = list(blood_groups.values())
+        colors_list = ['#ff9999', '#66b3ff', '#99ff99', '#ffcc99', '#ff99cc', '#c2c2f0', '#ffb3e6', '#c2f0c2']
+        plt.figure(figsize=(10, 8))
+        plt.pie(sizes, labels=labels, colors=colors_list[:len(labels)], autopct='%1.1f%%',
+                startangle=90, textprops={'fontsize': 12, 'weight': 'bold'})
+        plt.title("Blood Group Distribution Among Donors", fontsize=14, weight='bold', pad=20)
+        plt.axis('equal')
+        plt.tight_layout()
+        plt.show()
+    def export_donors_csv(self):
+        if not self.system.donors:
+            messagebox.showwarning("No Data", "No donors to export")
+            return
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile=f"donors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+        if file_path:
+            try:
+                with open(file_path, 'w', newline='') as csvfile:
+                    fieldnames = ['ID', 'Name', 'Age', 'Gender', 'Blood Group', 'Organ', 'Status', 'Date']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()  
+                    for donor in self.system.donors:
+                        writer.writerow({
+                            'ID': donor.pid,
+                            'Name': donor.name,
+                            'Age': donor.age,
+                            'Gender': donor.gender,
+                            'Blood Group': donor.blood_group,
+                            'Organ': donor.organ,
+                            'Status': donor.status,
+                            'Date': donor.date
+                        })               
+                messagebox.showinfo("Success", f"Donors exported to {file_path}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to export: {str(e)}")
+    def export_recipients_csv(self):
+        if not self.system.recipients:
+            messagebox.showwarning("No Data", "No recipients to export")
+            return
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile=f"recipients_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+        if file_path:
+            try:
+                with open(file_path, 'w', newline='') as csvfile:
+                    fieldnames = ['ID', 'Name', 'Age', 'Gender', 'Blood Group', 'Organ Needed', 'Priority', 'Date']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()                  
+                    for recipient in self.system.recipients:
+                        writer.writerow({
+                            'ID': recipient.pid,
+                            'Name': recipient.name,
+                            'Age': recipient.age,
+                            'Gender': recipient.gender,
+                            'Blood Group': recipient.blood_group,
+                            'Organ Needed': recipient.organ_needed,
+                            'Priority': recipient.priority,
+                            'Date': recipient.date
+                        })               
+                messagebox.showinfo("Success", f"Recipients exported to {file_path}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to export: {str(e)}")
+    def generate_pdf_report(self):
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+            initialfile=f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        )
+        if file_path:
+            try:
+                doc = SimpleDocTemplate(file_path, pagesize=letter)
+                story = []
+                styles = getSampleStyleSheet()                
+                title_style = ParagraphStyle(
+                    'CustomTitle',
+                    parent=styles['Heading1'],
+                    fontSize=24,
+                    textColor=colors.HexColor('#1f4788'),
+                    spaceAfter=30,
+                    alignment=1
+                )
+                story.append(Paragraph("MediCare - Organ Donation System Report", title_style))
+                story.append(Spacer(1, 0.3*inch))
+                report_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                story.append(Paragraph(f"<b>Report Generated:</b> {report_date}", styles['Normal']))
+                story.append(Spacer(1, 0.2*inch))
+                story.append(Paragraph("<b>Summary Statistics</b>", styles['Heading2']))
+                summary_data = [
+                    ['Total Donors', str(self.system.donor_count())],
+                    ['Total Recipients', str(self.system.recipient_count())],
+                    ['Successful Matches', str(self.system.match_count())]
+                ]
+                summary_table = Table(summary_data, colWidths=[3*inch, 2*inch])
+                summary_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, -1), colors.beige),
+                    ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 12),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                ]))
+                story.append(summary_table)
+                story.append(Spacer(1, 0.3*inch))
+                story.append(Paragraph("<b>Registered Donors</b>", styles['Heading2']))
+                donor_data = [['ID', 'Name', 'Blood', 'Organ', 'Status']]
+                for donor in self.system.donors[:10]:
+                    donor_data.append([donor.pid, donor.name, donor.blood_group, donor.organ, donor.status])
+                if len(donor_data) > 1:
+                    donor_table = Table(donor_data, colWidths=[1*inch, 1.5*inch, 1*inch, 1*inch, 1.5*inch])
+                    donor_table.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('FONTSIZE', (0, 0), (-1, 0), 10),
+                        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                    ]))
+                    story.append(donor_table)
+                story.append(Spacer(1, 0.3*inch))
+                story.append(Paragraph("<b>Registered Recipients</b>", styles['Heading2']))
+                recipient_data = [['ID', 'Name', 'Blood', 'Organ', 'Priority']]
+                for recipient in self.system.recipients[:10]:
+                    recipient_data.append([recipient.pid, recipient.name, recipient.blood_group, 
+                                         recipient.organ_needed, recipient.priority])
+                if len(recipient_data) > 1:
+                    recipient_table = Table(recipient_data, colWidths=[1*inch, 1.5*inch, 1*inch, 1.5*inch, 1*inch])
+                    recipient_table.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('FONTSIZE', (0, 0), (-1, 0), 10),
+                        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                    ]))
+                    story.append(recipient_table)
+                doc.build(story)
+                messagebox.showinfo("Success", f"PDF report generated: {file_path}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to generate PDF: {str(e)}")
+class OrganDonationGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("MediCare - Organ Donation System")
+        self.root.geometry("1400x900")
+        self.root.config(bg="lightblue")
+        header_frame = tk.Frame(root, bg="darkgreen", height=60)
+        header_frame.pack(fill="x")
+    
+        header_title = tk.Label(header_frame, text="MediCare - Hospital Organ Donation Management System", 
+                               font=("Arial", 18, "bold"), bg="darkgreen", fg="white")
+        header_title.pack(pady=10)
+        self.system = OrganDonationSystem()
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(fill="both", expand=True, padx=5, pady=5)
+        self.donor_tab = ttk.Frame(self.notebook)
+        self.rec_tab = ttk.Frame(self.notebook)
+        self.match_tab = ttk.Frame(self.notebook)
+        self.history_tab = ttk.Frame(self.notebook)
+        self.analytics_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.donor_tab, text="Donors")
+        self.notebook.add(self.rec_tab, text="Recipients")
+        self.notebook.add(self.match_tab, text="Matching")
+        self.notebook.add(self.history_tab, text="History")
+        self.notebook.add(self.analytics_tab, text="Analytics")
+        self.donor_section = DonorSection(self.donor_tab, self.system, self.refresh_table)
+        self.recipient_section = RecipientSection(self.rec_tab, self.system, self.refresh_table)
+        self.matching_section = MatchingSection(self.match_tab, self.system, self.refresh_table)
+        self.history_section = HistorySection(self.history_tab, self.system)
+        self.analytics_section = AnalyticsSection(self.analytics_tab, self.system)
+        self.create_table()
+    def create_table(self):
+        table_frame = tk.LabelFrame(self.root, text="All Records", font=("Arial", 12, "bold"))
+        table_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.tree = ttk.Treeview(table_frame, columns=("ID", "Name", "Type", "Organ", "Blood"), show="headings", height=10)
+        for c in ("ID", "Name", "Type", "Organ", "Blood"):
+            self.tree.heading(c, text=c)
+            self.tree.column(c, width=200)
+        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscroll=scrollbar.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+    def refresh_table(self):
+        self.tree.delete(*self.tree.get_children())
+        for d in self.system.donors:
+            self.tree.insert("", "end", values=(d.pid, d.name, "Donor", d.organ, d.blood_group))
+        for r in self.system.recipients:
+            self.tree.insert("", "end", values=(r.pid, r.name, "Recipient", r.organ_needed, r.blood_group))
+        self.history_section.refresh_history()
+def start():
+    root = tk.Tk()
+    OrganDonationGUI(root)
+    root.mainloop()
+if __name__ == "__main__":
+    root = tk.Tk()
+    root.withdraw()
+    LoginWindow(root, start)
+    root.mainloop()
